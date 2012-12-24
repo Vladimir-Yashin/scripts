@@ -1,0 +1,5 @@
+In the past I was using this script to monitor HP blade system using Icinga/Nagios.
+It does ssh to blade enclosure and executes CLI command, then special python script
+does the formatting for Icinga to understand it correctly
+
+Uses expect utility

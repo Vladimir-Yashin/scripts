@@ -1,0 +1,3 @@
+Dumb script for my Lenovo Thinkpad Edge E320 laptop.
+It has some problems with WiFi module, so this script is pinging
+192.168.1.1 and reinserts kernel module when there is no connectivity.
