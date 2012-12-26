@@ -1,0 +1,11 @@
+Call a phone number using attached Cisco IP Phone
+Usage: ipcall.py [-d] [-u username] [-p phone_ip_address] <phone number>
+
+Default value for phone IP address is coded in the script, credentials are
+stored in local user keychain (kwallet, gnome-keyring, whatever)
+
+Could be used even like this:
+ipcall.py +32 2 56 78 89
+
+See the source for details, it's not super complex
+
