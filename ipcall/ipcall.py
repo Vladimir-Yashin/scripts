@@ -51,7 +51,7 @@ def call(username, password, number):
     c.perform()
     result = c.getinfo(pycurl.RESPONSE_CODE)
     print("Result code: %s" % result)
-    if result != 201:
+    if result != 200:
         error("Error %s, look at console output for details" % result)
 
 def main():
