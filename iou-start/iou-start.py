@@ -6,6 +6,7 @@ import copy
 import getopt
 import ConfigParser
 import re
+import socket
 
 app_name = "iou-start"
 app_version = "0.1"
@@ -53,8 +54,46 @@ def main():
     print("GLOBAL = %s" % global_data)
     print("ROUTERS = %s" % routers)
 
+    tun_connections = []
     # Generating NETMAP file
-    # TODO
+    with open(global_data["workdir"] + "/NETMAP", "w") as f:
+        for r in routers:
+            for conn_from_port, conn_to_combined in r["conns"]:
+                if conn_to_combined == "tun":
+                    tun = {
+                            "id": global_data["base_id"],
+                            "name": "tun_" + r["name"] + "_" + conn_from_port
+                            }
+                    global_data["base_id"] += 1
+                    tun_connections.append(tun)
+                    hostname = socket.gethostname()
+                    f.write("%s:%s@%s %s:0/0@%s\n" % (r["id"], conn_from_port, hostname, tun["id"], hostname) )
+                else:
+                    m = re.search("([a-zA-Z0-9]+)\s([0-9]/[0-9]+)", conn_to_combined)
+                    conn_to_router_name = m.group(1)
+                    conn_to_port = m.group(2)
+                    conn_to_router = filter(lambda r: r["name"] == conn_to_router_name, routers)[0]
+                    f.write("%s:%s %s:%s\n" % (r["id"], conn_from_port, conn_to_router["id"], conn_to_port) )
+
+    # Running all commands
+    print("\n\n")
+    print("cd %s" % global_data["workdir"])
+    print("export NETIO_NETMAP=%s" % global_data["workdir"] + "/NETMAP")
+    for r in routers:
+        print("%s -m %s -p %s -- -e %s -s %s -m %s -n %s -q %s > /dev/null 2>&1 &" % (
+            global_data["wrapper"],
+            r["iou"],
+            r["console"],
+            r["ethernets"],
+            r["serials"],
+            r["mem"],
+            r["nvram"],
+            r["id"]) )
+
+    for t in tun_connections:
+        print("%s -t %s -p %s > /dev/null 2>&1 &" % (global_data["iou2net"], t["name"], t["id"]) )
+
+
 
 def load_config(path):
     # Data format definition
@@ -74,6 +113,7 @@ def load_config(path):
             "nvram"    : 32,
             "ethernets": 1,
             "serials"  : 1,
+            "conns"    : [],
             }
 
     config = ConfigParser.ConfigParser()
@@ -87,10 +127,10 @@ def load_config(path):
     print("Found [global] section")
     if config.has_option("global", "base_id"):
         global_data["base_id"] = config.get("global", "base_id")
-    global_data["workdir"] = config.get("global", "workdir")
-    global_data["iou"]     = config.get("global", "iou")
-    global_data["wrapper"] = config.get("global", "wrapper")
-    global_data["iou2net"] = config.get("global", "iou2net")
+    global_data["workdir"] = os.path.expanduser(config.get("global", "workdir"))
+    global_data["iou"]     = os.path.expanduser(config.get("global", "iou"))
+    global_data["wrapper"] = os.path.expanduser(config.get("global", "wrapper"))
+    global_data["iou2net"] = os.path.expanduser(config.get("global", "iou2net"))
     for item, val in config.items("global"):
         if not item in global_data:
             print("Unused variable %s" % item)
@@ -128,7 +168,7 @@ def load_config(path):
         r["conns"] = []
         for item, val in config.items(sec):
             if re.match("^[0-9]/[0-9]+", item):
-                r["conns"] += (item, val)
+                r["conns"].append((item, val))
         routers.append(r)
 
     return (global_data, routers)
