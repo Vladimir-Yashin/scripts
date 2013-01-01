@@ -1,0 +1,2 @@
+Plain password-check script for x11vnc.
+Useful for remote support application. It grants access to sudo-enabled users.

@@ -1,0 +1,8 @@
+These scripts act like hdmi-helper, but they
+can be used in multi-user environment.
+video-helper.sh changes screen resolution and configuration upon connecting/disconnecting VGA output,
+but it requires .Xauthority and DISPLAY variable (because X is running from user account)
+
+For this purpose video-helper-user.sh is executed immediate after user login. It creates file in /tmp
+with all required data.
+
