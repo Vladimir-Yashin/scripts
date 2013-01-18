@@ -7,6 +7,9 @@ import getopt
 import ConfigParser
 import re
 import socket
+import subprocess
+import time
+import shlex
 
 app_name = "iou-start"
 app_version = "0.1"
@@ -51,9 +54,48 @@ def main():
         print("Error reading config file: %s" % err)
         sys.exit(4)
 
-    print("GLOBAL = %s" % global_data)
-    print("ROUTERS = %s" % routers)
+    try:
+        tun_connections = write_netmap_file(global_data, routers)
+    except Exception as err:
+        print("Error writing NETMAP file: %s" % err)
+        sys.exit(4)
 
+    try:
+        run_commands(global_data, routers, tun_connections)
+    except Exception as err:
+        print("Error executing commands: %s" % err)
+        sys.exit(4)
+
+    time.sleep(100000000)
+
+def run_commands(global_data, routers, tun_connections):
+    print("Starting routers...")
+    for r in routers:
+        cmd = "%s -m %s -p %s -- -e %s -s %s -m %s -n %s -q %s" % (
+            global_data["wrapper"],
+            r["iou"],
+            r["console"],
+            r["ethernets"],
+            r["serials"],
+            r["mem"],
+            r["nvram"],
+            r["id"])
+        print(cmd)
+        out_f = open("%s/%s.log" % (global_data["workdir"], r["name"]), "w")
+        subprocess.Popen(cmd, shell=True, cwd=global_data["workdir"], stdout=out_f, stderr=subprocess.STDOUT)
+
+    time.sleep(5)
+    print("Starting TAPs...")
+    for t in tun_connections:
+        cmd = "%s -t %s -p %s" % (global_data["iou2net"], t["name"], t["id"])
+        print(cmd)
+        subprocess.Popen(cmd, shell=True, cwd=global_data["workdir"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        time.sleep(2)
+        cmd = "ip link set %s up" % t["name"]
+        print(cmd)
+        subprocess.Popen(cmd, shell=True)
+
+def write_netmap_file(global_data, routers):
     tun_connections = []
     # Generating NETMAP file
     with open(global_data["workdir"] + "/NETMAP", "w") as f:
@@ -62,7 +104,7 @@ def main():
                 if conn_to_combined == "tun":
                     tun = {
                             "id": global_data["base_id"],
-                            "name": "tun_" + r["name"] + "_" + conn_from_port
+                            "name": "tun_" + r["name"] + "_" + re.sub("\/", "_", conn_from_port)
                             }
                     global_data["base_id"] += 1
                     tun_connections.append(tun)
@@ -75,34 +117,23 @@ def main():
                     conn_to_router = filter(lambda r: r["name"] == conn_to_router_name, routers)[0]
                     f.write("%s:%s %s:%s\n" % (r["id"], conn_from_port, conn_to_router["id"], conn_to_port) )
 
-    # Running all commands
-    print("\n\n")
-    print("cd %s" % global_data["workdir"])
-    print("export NETIO_NETMAP=%s" % global_data["workdir"] + "/NETMAP")
-    for r in routers:
-        print("%s -m %s -p %s -- -e %s -s %s -m %s -n %s -q %s > /dev/null 2>&1 &" % (
-            global_data["wrapper"],
-            r["iou"],
-            r["console"],
-            r["ethernets"],
-            r["serials"],
-            r["mem"],
-            r["nvram"],
-            r["id"]) )
+    # License file
+    with open(global_data["workdir"] + "/iourc", "w") as f:
+        f.write("[license]\n%s = %s;\n" % (socket.gethostname(), global_data["license"]) )
 
-    for t in tun_connections:
-        print("%s -t %s -p %s > /dev/null 2>&1 &" % (global_data["iou2net"], t["name"], t["id"]) )
-
-
+    return tun_connections
 
 def load_config(path):
     # Data format definition
     global_data = {
-        "base_id": 100,
-        "workdir": False,
-        "iou"    : False,
-        "wrapper": False,
-        "iou2net": False,
+        "base_id"     : 100,
+        "workdir"     : False,
+        "iou"         : False,
+        "wrapper"     : False,
+        "iou2net"     : False,
+        "telnet"      : False,
+        "tmux_session": "iou",
+        "license"     : False,
             }
     router_template = {
             "name"     : "router",
@@ -124,13 +155,14 @@ def load_config(path):
     if not config.has_section("global"):
         raise Exception("[global] section missing")
 
-    print("Found [global] section")
     if config.has_option("global", "base_id"):
-        global_data["base_id"] = config.get("global", "base_id")
+        global_data["base_id"] = int(config.get("global", "base_id"))
     global_data["workdir"] = os.path.expanduser(config.get("global", "workdir"))
     global_data["iou"]     = os.path.expanduser(config.get("global", "iou"))
     global_data["wrapper"] = os.path.expanduser(config.get("global", "wrapper"))
     global_data["iou2net"] = os.path.expanduser(config.get("global", "iou2net"))
+    global_data["telnet"]  = os.path.expanduser(config.get("global", "telnet"))
+    global_data["license"] = config.get("global", "license")
     for item, val in config.items("global"):
         if not item in global_data:
             print("Unused variable %s" % item)
