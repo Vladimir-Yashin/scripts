@@ -1,0 +1,4 @@
+Run this tiny script from PAM and it will set disk quota limits for a user.
+Most of the time it is used for a first user login, but if you change quota
+limits in the script the limits will get changed automatically for all users
+on next logon.

@@ -1,0 +1,2 @@
+Run this script automatically upon user login and it will create evolution account
+using information from LDAP server

@@ -1,0 +1,6 @@
+This is a wrapper around any redirected RDP application.
+It uses xfreerdp to run applications, but it makes it
+completely transparent to user due to leveraging local keyring for storing user password.
+
+It asks user for a password during first-time login and stores it in user keyring (kwallet, gnome-keyring, whatever)
+
