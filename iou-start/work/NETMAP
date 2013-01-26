@@ -1,3 +1,3 @@
-100:0/0 101:0/0
-100:0/1 101:0/1
-101:1/0@vyashin-pc 102:0/0@vyashin-pc
+R1:0/0@vyashin-pc 104:0/0@vyashin-pc
+R1:1/0 R2:1/0
+R2:0/0@vyashin-pc 106:0/0@vyashin-pc
