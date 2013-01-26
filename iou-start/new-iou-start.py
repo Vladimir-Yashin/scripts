@@ -2,14 +2,13 @@
 
 import sys
 import os
-import copy
 import getopt
 import ConfigParser
 import re
 import socket
 import subprocess
 import time
-import shlex
+import signal
 
 app_name = "iou-start"
 app_version = "0.2"
@@ -51,14 +50,12 @@ class Tun:
         return "[%d] %s" % (self._id, self.name)
 
     def get_cmdline(self):
-        return "%s/%s -t %s -p %s" % (GlobalData.iou_store, GlobalData.iou2net, self.name, self._id))
+        return "%s/%s -t %s -p %s" % (GlobalData.iou_store, GlobalData.iou2net, self.name, self._id)
 
     def is_alive(self):
         # First check if process with self.PID is running
         check_pid = False
-        if self.pid is None:
-            check_pid = False
-        else:
+        if self.pid is not None:
             try:
                 os.kill(self.pid, 0)
             except OSError:
@@ -80,7 +77,18 @@ class Tun:
         elif check_name == False and check_pid == False:
             return False
         else:
-            raise Exception("TUN alive check failed, PID check and ifname check gave different results")
+            raise Exception("TUN alive check failed, PID check (%s) and ifname check (%s) gave different results" % (check_pid, check_name))
+
+    """
+    Run iou2net
+    Takes: None
+    Returns: Integer
+    """
+    def run(self):
+        self.pid = subprocess.Popen(self.get_cmdline(), shell=True, cwd=GlobalData.workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).pid
+        print(self.get_cmdline())
+        return self.pid
+
 
 class Connection:
     from_router = None
@@ -105,13 +113,13 @@ class Connection:
                     )
 
     def is_tun(self):
-        return to_tun is not None
+        return self.to_tun is not None
 
     def get_cmdline(self):
         if self.is_tun():
             return self.to_tun.get_cmdline()
         else:
-            raise Exception("Asked cmdline for not TUN connection")
+            raise Exception("Asked cmdline for non TUN connection")
 
 
 """
@@ -228,6 +236,18 @@ class IouRouter(object):
         else:
             return True
 
+    """
+    Run router instance
+    Takes: None
+    Returns: Integer
+    """
+    def run(self):
+        # Specifying log file for router instance
+        out_f = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
+        # Running
+        self.pid = subprocess.Popen(self.get_cmdline(), shell=True, cwd=GlobalData.workdir, stdout=out_f, stderr=subprocess.STDOUT).pid
+        return self.pid
+
 
 """
 Read configuration file and create all router structures
@@ -298,7 +318,7 @@ Used for graceful shutdown upon receiving Ctrl+C in terminal
 Takes: None
 Returns: None
 """
-def ctrlc_handler():
+def ctrlc_handler(signum, name):
     print("SIGINT catched, terminating...")
     for r in Routers:
         if r.is_alive():
@@ -307,7 +327,7 @@ def ctrlc_handler():
             except OSError:
                 pass
             for conn in r.conns:
-                if conn.is_tun() and conn.is_alive():
+                if conn.is_tun() and conn.to_tun.is_alive():
                     try:
                         os.kill(conn.to_tun.pid, 2) #SIGINT
                     except OSError:
@@ -338,7 +358,7 @@ def print_status():
     # Showing router table
     print("CONSOLE\tROUTER\tRAM\tPID\tALIVE")
     for r in Routers:
-        if not r.is_template:
+        if not r.is_template():
             if r.is_alive():
                 check = "NO"
             else:
@@ -386,36 +406,34 @@ def main():
     #    print(r)
 
     # Writing NETMAP and IOURC files
+    with open(GlobalData.workdir + "/NETMAP", "w") as f:
+        for r in Routers:
+            for line in r.get_netmap():
+                f.write(line)
+    with open(GlobalData.workdir + "/iourc", "w") as f:
+        f.write("[license]\n%s = %s;\n" % (GlobalData.hostname, GlobalData.license) )
     try:
-        with open(GlobalData.workdir + "/NETMAP", "w") as f:
-            for r in Routers:
-                for line in r.get_netmap():
-                    f.write(line)
-        with open(GlobalData.workdir + "/iourc", "w") as f:
-            f.write("[license]\n%s = %s;\n" % (GlobalData.hostname, GlobalData.license) )
+        pass
     except Exception as err:
         print("Error writing NETMAP and IOURC files: %s" % err)
         sys.exit(4)
 
     # Running commands
+    # Running only real routers
+    for r in Routers:
+        if not r.is_template():
+            #cmd = r.get_cmdline()
+            #print(cmd)
+            r.run()
+    # Running iou2net instances
+    for r in Routers:
+        for conn in r.conns:
+            if conn.is_tun():
+                #cmd = conn.get_cmdline()
+                #print(cmd)
+                conn.to_tun.run()
     try:
-        # Running just real routers
-        for r in Routers:
-            if not r.is_template():
-                cmd = r.get_cmdline()
-                # print(cmd)
-                # Specifying log file for router instance
-                out_f = open("%s/%s.log" % (GlobalData.workdir, r.name), "w")
-                # Running
-                r.pid = subprocess.Popen(cmd, shell=True, cwd=GlobalData.workdir, stdout=out_f, stderr=subprocess.STDOUT).pid
-                # print(r.pid)
-        # Running iou2net instances
-        for r in Routers:
-            for conn in r.conns:
-                if conn.is_tun():
-                    cmd = conn.get_cmdline()
-                    print(cmd)
-                    conn.to_tun.pid = subprocess.Popen(cmd, shell=True, cwd=GlobalData.workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        pass
     except Exception as err:
         print("Error executing commands: %s" % err)
         sys.exit(4)
