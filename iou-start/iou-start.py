@@ -7,18 +7,23 @@ import getopt
 import ConfigParser
 import re
 import socket
+import signal
+import time
 
-app_name = "iou-start"
-app_version = "0.1"
+def version():
+    return "0.1"
+
+def appname():
+    return "iou-start"
 
 def print_version():
-    print("%s version %s" % (app_name, app_version) )
+    print("%s version %s" % (appname(), version()) )
 
 def print_usage():
     print("""
     Python script that starts multiple IOU instances in separate screen/tmux session
     Usage: %s [-v | --version] [-u | --usage] [-h | --help] -c <config_file>
-    """ % (app_name) )
+    """ % (appname()) )
 
 def main():
     #Parsing cmdline options
@@ -79,6 +84,7 @@ def main():
     print("\n\n")
     print("cd %s" % global_data["workdir"])
     print("export NETIO_NETMAP=%s" % global_data["workdir"] + "/NETMAP")
+    print("ROUTER\tCONSOLE")
     for r in routers:
         print("%s -m %s -p %s -- -e %s -s %s -m %s -n %s -q %s > /dev/null 2>&1 &" % (
             global_data["wrapper"],
@@ -89,11 +95,22 @@ def main():
             r["mem"],
             r["nvram"],
             r["id"]) )
+        print("%s\t%s" % (r["name"], r["console"]) )
 
+    print("TUN IFNAMES")
     for t in tun_connections:
         print("%s -t %s -p %s > /dev/null 2>&1 &" % (global_data["iou2net"], t["name"], t["id"]) )
+        print(t["name"])
 
+    # Printing information and waiting for Ctrl+C
+    print("Telnet to ports indicated above to get access to router console.")
+    print("Press Ctrl+C to exit.")
+    signal.signal(signal.SIGINT, sigint_handler)
 
+def sigint_handler(signum, frame):
+    print("Ctrl+C received, cleaning up...")
+    #TODO
+    sys.exit(0)
 
 def load_config(path):
     # Data format definition
