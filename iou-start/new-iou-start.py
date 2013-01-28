@@ -71,6 +71,10 @@ class Tun:
                     check_name = True
                     break
 
+        #FIXME: something is wrong with check
+        check_pid = check_name
+        #FIXME: xwrapper is always spawning subprocess, so we can't rely on PID
+
         # Summing up
         if check_name == True and check_pid == True:
             return True
@@ -85,13 +89,14 @@ class Tun:
     Returns: Integer
     """
     def run(self):
-        self.pid = subprocess.Popen(self.get_cmdline(), shell=True, cwd=GlobalData.workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).pid
-        print(self.get_cmdline())
+        # Logging
+        out_f = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
+        # Running
+        self.pid = subprocess.Popen(self.get_cmdline(), shell=True, cwd=GlobalData.workdir, stdout=out_f, stderr=subprocess.STDOUT).pid
         return self.pid
 
 
 class Connection:
-    from_router = None
     to_router   = None
     from_port   = None
     to_port     = None
@@ -100,14 +105,12 @@ class Connection:
     def __str__(self):
         if self.to_tun is None:
             return "%s %s = %s %s\n" % (
-                self.from_router,
                 self.from_port,
                 self.to_router,
                 self.to_port
                 )
         else:
             return "%s %s = TUN %s" % (
-                    self.from_router,
                     self.from_port,
                     self.to_tun
                     )
@@ -216,9 +219,9 @@ class IouRouter(object):
         res = []
         for conn in self.conns:
             if conn.is_tun():
-                res.append("%s:%s@%s %s:0/0@%s\n" % (conn.from_router, conn.from_port, GlobalData.hostname, conn.to_tun._id, GlobalData.hostname))
+                res.append("%s:%s@%s %s:0/0@%s\n" % (self._id, conn.from_port, GlobalData.hostname, conn.to_tun._id, GlobalData.hostname))
             else:
-                res.append("%s:%s %s:%s\n" % (conn.from_router, conn.from_port, conn.to_router, conn.to_port))
+                res.append("%s:%s %s:%s\n" % (self._id, conn.from_port, conn.to_router._id, conn.to_port))
         return res
 
     """
@@ -273,10 +276,9 @@ def read_config(path):
             if re.match("^[0-9]/[0-9]+", item):
                 # We found connection
                 conn = Connection()
-                conn.from_router = sec
                 conn.from_port   = item
                 if val == "tun":
-                    conn.to_tun = Tun("tun_%s" % re.sub("\/", "_", conn.from_port))
+                    conn.to_tun = Tun("tun_%s_%s" % (r.name, re.sub("\/", "_", conn.from_port)))
                 else:
                     m = re.search("([a-zA-Z0-9]+)\s([0-9]/[0-9]+)", val)
                     conn.to_router   = m.group(1)
@@ -287,11 +289,16 @@ def read_config(path):
                 setattr(r, item, val)
         Routers.append(r)
 
-    # Update references for _parent and replace None values from it
+    # Postprocess, update references
     for r in Routers:
+        # Update references for _parent and replace None values from it
         if hasattr(r, "parent"):
             r._parent = filter((lambda rtr: rtr.name == r.parent), Routers)[0]
             r.copy_from_parent()
+        # Update conn.to_router with reference to router object
+        for c in r.conns:
+            if not c.is_tun():
+                c.to_router = filter((lambda rtr: rtr.name == c.to_router), Routers)[0]
 
 """
 Prints app version in terminal
@@ -345,14 +352,14 @@ Returns: None
 """
 def print_status():
     # Check if all TUN-s are running
-    print("TUN\tALIVE")
+    print("TUN\tPID\tALIVE")
     for r in Routers:
         for conn in r.conns:
             if conn.is_tun():
                 if conn.to_tun.is_alive():
-                    print("%s\tYES" % (conn.to_tun.name))
+                    print("%s\t\t%s\tYES" % (conn.to_tun.name, conn.to_tun.pid))
                 else:
-                    print("%s\tNO" % (conn.to_tun.name))
+                    print("%s\t\t%s\tNO" % (conn.to_tun.name,conn.to_tun.pid))
     print("")
 
     # Showing router table
@@ -394,11 +401,7 @@ def main():
         sys.exit(3)
 
     # Reading configuration file
-    try:
-        read_config(config_path)
-    except Exception as err:
-        print("Error reading config file: %s" % err)
-        sys.exit(4)
+    read_config(config_path)
 
     # Debug print
     #print(GlobalData)
@@ -412,11 +415,6 @@ def main():
                 f.write(line)
     with open(GlobalData.workdir + "/iourc", "w") as f:
         f.write("[license]\n%s = %s;\n" % (GlobalData.hostname, GlobalData.license) )
-    try:
-        pass
-    except Exception as err:
-        print("Error writing NETMAP and IOURC files: %s" % err)
-        sys.exit(4)
 
     # Running commands
     # Running only real routers
@@ -425,6 +423,8 @@ def main():
             #cmd = r.get_cmdline()
             #print(cmd)
             r.run()
+    # Waiting for all routers to start
+    time.sleep(5)
     # Running iou2net instances
     for r in Routers:
         for conn in r.conns:
@@ -432,14 +432,7 @@ def main():
                 #cmd = conn.get_cmdline()
                 #print(cmd)
                 conn.to_tun.run()
-    try:
-        pass
-    except Exception as err:
-        print("Error executing commands: %s" % err)
-        sys.exit(4)
 
-    # Waiting for all routers to start
-    time.sleep(5)
 
     # Setting Ctrl+C handler for graceful shutdown
     signal.signal(signal.SIGINT, ctrlc_handler)
