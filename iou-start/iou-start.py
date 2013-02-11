@@ -18,6 +18,7 @@ class __GlobalData(object):
     hostname  = socket.gethostname()
     iou_store = None
     workdir   = None
+    respawn   = False
 
     def get_id(self):
         self.base_id += 1
@@ -32,10 +33,12 @@ class __GlobalData(object):
     def __str__(self):
         return str(self.__dict__)
 
+#FIXME: make GlobalData true static class
 GlobalData = __GlobalData()
 #class Routers(list):
 #    pass
 Routers = []
+#FIXME: make Routers a class inheriting from list and add some useful methods to it
 
 class Tun:
     _id = None
@@ -245,6 +248,15 @@ class IouRouter(object):
     Returns: Integer
     """
     def run(self):
+        # Use persistent NVRAM file tied to router name rather then ID
+        real_file = GlobalData.workdir + "/nvram_" + self.name
+        link_file = GlobalData.workdir + "/nvram_" + "{0:05d}".format(self._id)
+        if not os.path.isfile(real_file):
+            with open(real_file, "w") as f:
+                f.write("")
+        if os.path.exists(link_file):
+            os.remove(link_file)
+        os.symlink(real_file, link_file)
         # Specifying log file for router instance
         out_f = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
         # Running
@@ -344,6 +356,22 @@ def ctrlc_handler(signum, name):
     print_status()
     sys.exit(0)
 
+"""
+Try to run again each router if it crashed
+Takes: None
+Returns: None
+"""
+#FIXME: not respawning routers, because when router dies it's parent sh process is stuck in <defunct> state and is
+# still considered to be alive
+def respawn():
+    for r in Routers:
+        # Running only real routers
+        if not r.is_template():
+            if not r.is_alive():
+                # Don't print message if starting router for first time
+                if r.pid is not None:
+                    print("Respawning router %s" % r.name)
+                r.run()
 
 """
 Print table with TUN and routers status
@@ -367,9 +395,9 @@ def print_status():
     for r in Routers:
         if not r.is_template():
             if r.is_alive():
-                check = "NO"
-            else:
                 check = "YES"
+            else:
+                check = "NO"
             print("%s\t%s\t%s\t%s\t%s" % (r.console, r.name, r.ram, r.pid, check))
     print("")
 
@@ -417,12 +445,7 @@ def main():
         f.write("[license]\n%s = %s;\n" % (GlobalData.hostname, GlobalData.license) )
 
     # Running commands
-    # Running only real routers
-    for r in Routers:
-        if not r.is_template():
-            #cmd = r.get_cmdline()
-            #print(cmd)
-            r.run()
+    respawn()
     # Waiting for all routers to start
     time.sleep(5)
     # Running iou2net instances
@@ -439,6 +462,8 @@ def main():
 
     # Entering main loop
     while True:
+        if GlobalData.respawn.lower() in ["true", "yes", "1", "y", "t"]:
+            respawn()
         print_status()
         raw_input("Press ENTER to refresh or Ctrl+C to exit and kill all IOU instances...")
 
