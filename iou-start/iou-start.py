@@ -19,6 +19,7 @@ class __GlobalData(object):
     iou_store = None
     workdir   = None
     respawn   = False
+    debug     = False
 
     def get_id(self):
         self.base_id += 1
@@ -41,9 +42,11 @@ Routers = []
 #FIXME: make Routers a class inheriting from list and add some useful methods to it
 
 class Tun:
-    _id = None
-    name = None
-    pid  = None
+    _id       = None
+    _log_file = None
+    name      = None
+    pid       = None
+    br_name   = None
 
     def __init__(self, name):
         self._id = GlobalData.get_id()
@@ -66,13 +69,7 @@ class Tun:
             else:
                 check_pid = True
         # Then check if interface with self.name exists
-        # Quick and dirty hack, works only on Linux
-        check_name = False
-        with open("/proc/net/dev", "r") as f:
-            for line in f:
-                if re.match(self.name, line):
-                    check_name = True
-                    break
+        check_name = check_if_iface_exists(self.name)
 
         #FIXME: something is wrong with check
         check_pid = check_name
@@ -87,16 +84,47 @@ class Tun:
             raise Exception("TUN alive check failed, PID check (%s) and ifname check (%s) gave different results" % (check_pid, check_name))
 
     """
-    Run iou2net
+    Run iou2net and add TUN to bridge if needed
     Takes: None
     Returns: Integer
     """
     def run(self):
         # Logging
-        out_f = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
-        # Running
-        self.pid = subprocess.Popen(self.get_cmdline(), shell=True, cwd=GlobalData.workdir, stdout=out_f, stderr=subprocess.STDOUT).pid
+        self._log_file = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
+        # Running iou2net
+        self.pid = sh(self.get_cmdline(), out=self._log_file)
+        # Check if need to put this TUN into bridge
+        if self.br_name is not None:
+            # Wait until iou2net is fully started
+            time.sleep(0.2)
+            # Check if bridge exists
+            if not check_if_iface_exists(self.br_name):
+                sh("brctl addbr %s" % self.br_name, out=self._log_file)
+            # Add interface to bridge (with all links down, just in case)
+            sh("ip link set %s down" % self.name,    out=self._log_file)
+            sh("ip link set %s down" % self.br_name, out=self._log_file)
+
+            sh("brctl addif %s %s" % (self.br_name, self.name), out=self._log_file)
+
+            sh("ip link set %s up" % self.name,    out=self._log_file)
+            sh("ip link set %s up" % self.br_name, out=self._log_file)
+
+
         return self.pid
+
+    """
+    Stop iou2net instance
+    Takes: None
+    Returns: None
+    """
+    def kill(self):
+        if self.is_alive():
+            try:
+                os.kill(self.pid, 2) #SIGINT
+            except OSError:
+                pass
+        if not self._log_file is None:
+            self._log_file.close()
 
 
 class Connection:
@@ -135,6 +163,7 @@ section in config (template and real routers)
 class IouRouter(object):
     _id          = None
     _parent      = None
+    _log_file    = None
     name         = None
     image        = None
     console      = None
@@ -248,20 +277,37 @@ class IouRouter(object):
     Returns: Integer
     """
     def run(self):
-        # Use persistent NVRAM file tied to router name rather then ID
-        real_file = GlobalData.workdir + "/nvram_" + self.name
-        link_file = GlobalData.workdir + "/nvram_" + "{0:05d}".format(self._id)
-        if not os.path.isfile(real_file):
-            with open(real_file, "w") as f:
-                f.write("")
-        if os.path.exists(link_file):
-            os.remove(link_file)
-        os.symlink(real_file, link_file)
-        # Specifying log file for router instance
-        out_f = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
-        # Running
-        self.pid = subprocess.Popen(self.get_cmdline(), shell=True, cwd=GlobalData.workdir, stdout=out_f, stderr=subprocess.STDOUT).pid
+        if not self.is_template() and not self.is_alive():
+            # Use persistent NVRAM file tied to router name rather then ID
+            real_file = GlobalData.workdir + "/nvram_" + self.name
+            link_file = GlobalData.workdir + "/nvram_" + "{0:05d}".format(self._id)
+            if not os.path.isfile(real_file):
+                with open(real_file, "w") as f:
+                    f.write("")
+            if os.path.exists(link_file):
+                os.remove(link_file)
+            os.symlink(real_file, link_file)
+            # Specifying log file for router instance
+            self._log_file = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
+            # Running
+            self.pid = sh(self.get_cmdline(), out=self._log_file)
         return self.pid
+
+    """
+    Stop router
+    Takes: None
+    Returns: None
+    """
+    def kill(self):
+        if self.is_alive():
+            try:
+                os.kill(self.pid, 2) #SIGINT
+            except OSError:
+                pass
+            map(lambda conn: conn.is_tun() and conn.to_tun.kill(), self.conns)
+        if not self._log_file is None:
+            self._log_file.close()
+
 
 
 """
@@ -289,12 +335,16 @@ def read_config(path):
                 # We found connection
                 conn = Connection()
                 conn.from_port   = item
-                if val == "tun":
+                val = val.split()
+                if len(val) > 2:
+                    raise Exception("Too many arguments to connection: [%s] %s" % (r.name, val))
+                if val[0] == "tun":
                     conn.to_tun = Tun("tun_%s_%s" % (r.name, re.sub("\/", "_", conn.from_port)))
+                    if len(val) == 2:
+                        conn.to_tun.br_name = val[1]
                 else:
-                    m = re.search("([a-zA-Z0-9]+)\s([0-9]/[0-9]+)", val)
-                    conn.to_router   = m.group(1)
-                    conn.to_port     = m.group(2)
+                    conn.to_router = val[0]
+                    conn.to_port   = val[1]
                 r.conns.append(conn)
             else:
                 # Just plain item=val
@@ -332,6 +382,17 @@ def print_usage():
     """ % (app_name) )
 
 """
+Run 'cmd' in Linux shell redirecting output to STDOUT or to supplied file descriptor,
+returns PID
+Takes: String, TextStream
+Returns: Integer
+"""
+def sh(cmd, out = sys.stdout):
+    if is_debugging():
+        out.write("DEBUG: sh: %s\n" % cmd)
+    return subprocess.Popen(cmd, shell=True, cwd=GlobalData.workdir, stdout=out, stderr=subprocess.STDOUT).pid
+
+"""
 Callback for SIGINT signal
 Used for graceful shutdown upon receiving Ctrl+C in terminal
 Takes: None
@@ -339,18 +400,7 @@ Returns: None
 """
 def ctrlc_handler(signum, name):
     print("SIGINT catched, terminating...")
-    for r in Routers:
-        if r.is_alive():
-            try:
-                os.kill(r.pid, 2) #SIGINT
-            except OSError:
-                pass
-            for conn in r.conns:
-                if conn.is_tun() and conn.to_tun.is_alive():
-                    try:
-                        os.kill(conn.to_tun.pid, 2) #SIGINT
-                    except OSError:
-                        pass
+    map(lambda r: r.kill(), Routers)
     # Let them shutdown
     time.sleep(2)
     print_status()
@@ -364,14 +414,7 @@ Returns: None
 #FIXME: not respawning routers, because when router dies it's parent sh process is stuck in <defunct> state and is
 # still considered to be alive
 def respawn():
-    for r in Routers:
-        # Running only real routers
-        if not r.is_template():
-            if not r.is_alive():
-                # Don't print message if starting router for first time
-                if r.pid is not None:
-                    print("Respawning router %s" % r.name)
-                r.run()
+    map(lambda r: r.run(), Routers)
 
 """
 Print table with TUN and routers status
@@ -400,6 +443,30 @@ def print_status():
                 check = "NO"
             print("%s\t%s\t%s\t%s\t%s" % (r.console, r.name, r.ram, r.pid, check))
     print("")
+
+"""
+Check if interface with 'ifname' exists in OS
+Takes: String
+Returns: Boolean
+"""
+def check_if_iface_exists(ifname):
+    # Quick and dirty hack, works only on Linux
+    check = False
+    with open("/proc/net/dev", "r") as f:
+        for line in f:
+            if re.match(ifname, line):
+                check = True
+                break
+    return check
+
+"""
+Returns True if debug was enabled in config file
+You can use this function to print conditional output
+Takes: None
+Returns: Boolean
+"""
+def is_debugging():
+    return GlobalData.debug.lower() in ["true", "yes", "1", "y", "t"]
 
 """
 MAIN
@@ -445,15 +512,15 @@ def main():
         f.write("[license]\n%s = %s;\n" % (GlobalData.hostname, GlobalData.license) )
 
     # Running commands
+    print("Starting routers...")
     respawn()
     # Waiting for all routers to start
-    time.sleep(5)
+    time.sleep(10)
     # Running iou2net instances
+    print("Starting iou2net instances...")
     for r in Routers:
         for conn in r.conns:
             if conn.is_tun():
-                #cmd = conn.get_cmdline()
-                #print(cmd)
                 conn.to_tun.run()
 
 
@@ -465,7 +532,7 @@ def main():
         if GlobalData.respawn.lower() in ["true", "yes", "1", "y", "t"]:
             respawn()
         print_status()
-        raw_input("Press ENTER to refresh or Ctrl+C to exit and kill all IOU instances...")
+        raw_input("Press ENTER to refresh or Ctrl+C to exit and kill all IOU instances...\n")
 
 
 if __name__ == "__main__":
