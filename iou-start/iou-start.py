@@ -9,6 +9,7 @@ import socket
 import subprocess
 import time
 import signal
+import StringIO
 
 app_name = "iou-start"
 app_version = "0.2"
@@ -36,10 +37,11 @@ class __GlobalData(object):
 
 #FIXME: make GlobalData true static class
 GlobalData = __GlobalData()
+
+#FIXME: make Routers a class inheriting from list and add some useful methods to it
 #class Routers(list):
 #    pass
 Routers = []
-#FIXME: make Routers a class inheriting from list and add some useful methods to it
 
 class Tun:
     _id       = None
@@ -72,8 +74,8 @@ class Tun:
         check_name = check_if_iface_exists(self.name)
 
         #FIXME: something is wrong with check
-        check_pid = check_name
         #FIXME: xwrapper is always spawning subprocess, so we can't rely on PID
+        check_pid = check_name
 
         # Summing up
         if check_name == True and check_pid == True:
@@ -83,16 +85,16 @@ class Tun:
         else:
             raise Exception("TUN alive check failed, PID check (%s) and ifname check (%s) gave different results" % (check_pid, check_name))
 
-    """
-    Run iou2net and add TUN to bridge if needed
-    Takes: None
-    Returns: Integer
-    """
     def run(self):
+        """
+        Run iou2net and add TUN to bridge if needed
+        Takes: None
+        Returns: Integer
+        """
         # Logging
         self._log_file = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
         # Running iou2net
-        self.pid = sh(self.get_cmdline(), out=self._log_file)
+        self.pid = sh(self.get_cmdline(), out=self._log_file).pid
         # Check if need to put this TUN into bridge
         if self.br_name is not None:
             # Wait until iou2net is fully started
@@ -112,12 +114,12 @@ class Tun:
 
         return self.pid
 
-    """
-    Stop iou2net instance
-    Takes: None
-    Returns: None
-    """
     def kill(self):
+        """
+        Stop iou2net instance
+        Takes: None
+        Returns: None
+        """
         if self.is_alive():
             try:
                 os.kill(self.pid, 2) #SIGINT
@@ -156,11 +158,11 @@ class Connection:
             raise Exception("Asked cmdline for non TUN connection")
 
 
-"""
-IOU router entity, constructed for each router
-section in config (template and real routers)
-"""
 class IouRouter(object):
+    """
+    IOU router entity, constructed for each router
+    section in config (template and real routers)
+    """
     _id          = None
     _parent      = None
     _log_file    = None
@@ -193,24 +195,24 @@ class IouRouter(object):
 
         return res
 
-    """
-    Check if this router was created from router template in config file
-    Router is considered real if it has console port defined in config
-    Takes: None
-    Returns: Boolean
-    """
     def is_template(self):
+        """
+        Check if this router was created from router template in config file
+        Router is considered real if it has console port defined in config
+        Takes: None
+        Returns: Boolean
+        """
         return self.console is None
 
-    """
-    This function is called while reading config file
-    It fills missing fields in router using parent template
-    If parent is not available it does nothing and you should
-    expect an error trying to read missing fields in future
-    Takes: None
-    Returns: None
-    """
     def copy_from_parent(self):
+        """
+        This function is called while reading config file
+        It fills missing fields in router using parent template
+        If parent is not available it does nothing and you should
+        expect an error trying to read missing fields in future
+        Takes: None
+        Returns: None
+        """
         if self._parent is None:
             return
         else:
@@ -219,12 +221,12 @@ class IouRouter(object):
                 if getattr(self, param) is None:
                     setattr(self, param, getattr(self._parent, param))
 
-    """
-    Return a cmdline for running this particular IOU router
-    Takes: None
-    Returns: None
-    """
     def get_cmdline(self):
+        """
+        Return a cmdline for running this particular IOU router
+        Takes: None
+        Returns: None
+        """
         if self.is_template():
             return ""
         else:
@@ -241,13 +243,13 @@ class IouRouter(object):
                 self._id
                 )
 
-    """
-    Produce a list of NETMAP lines for connections from this router,
-    both for local routers and TUNs
-    Takes: None
-    Returns: list[String]
-    """
     def get_netmap(self):
+        """
+        Produce a list of NETMAP lines for connections from this router,
+        both for local routers and TUNs
+        Takes: None
+        Returns: list[String]
+        """
         res = []
         for conn in self.conns:
             if conn.is_tun():
@@ -256,27 +258,44 @@ class IouRouter(object):
                 res.append("%s:%s %s:%s\n" % (self._id, conn.from_port, conn.to_router._id, conn.to_port))
         return res
 
-    """
-    Check if router is still running
-    Takes: None
-    Returns: Boolean
-    """
     def is_alive(self):
-        if self.pid is None:
+        """
+        Check if router is still running
+        Takes: None
+        Returns: Boolean
+        """
+        if self.is_template():
             return False
-        try:
-            os.kill(self.pid, 0)
-        except OSError:
-            return False
-        else:
-            return True
 
-    """
-    Run router instance
-    Takes: None
-    Returns: Integer
-    """
+        # Check PID
+        check_pid = False
+        if not self.pid is None:
+            try:
+                os.kill(self.pid, 0)
+            except OSError:
+                pass
+            else:
+                check_pid = True
+
+        # Check open console port
+        check_port = False
+        for line in sh("netstat -tnl", out=subprocess.PIPE).stdout:
+            if re.match(".+:" + str(self.console) + ".+", line):
+                check_port = True
+                break
+
+        # Combine results
+        if check_pid != check_port:
+            raise Exception("Router alive check failed, PID check (%s) and open console port check (%s) gave different results" % (check_pid, check_port))
+        else:
+            return check_pid
+
     def run(self):
+        """
+        Run router instance
+        Takes: None
+        Returns: Integer
+        """
         if not self.is_template() and not self.is_alive():
             # Use persistent NVRAM file tied to router name rather then ID
             real_file = GlobalData.workdir + "/nvram_" + self.name
@@ -290,15 +309,15 @@ class IouRouter(object):
             # Specifying log file for router instance
             self._log_file = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
             # Running
-            self.pid = sh(self.get_cmdline(), out=self._log_file)
+            self.pid = sh(self.get_cmdline(), out=self._log_file).pid
         return self.pid
 
-    """
-    Stop router
-    Takes: None
-    Returns: None
-    """
     def kill(self):
+        """
+        Stop router
+        Takes: None
+        Returns: None
+        """
         if self.is_alive():
             try:
                 os.kill(self.pid, 2) #SIGINT
@@ -310,12 +329,12 @@ class IouRouter(object):
 
 
 
-"""
-Read configuration file and create all router structures
-Takes: String
-Returns: None
-"""
 def read_config(path):
+    """
+    Read configuration file and create all router structures
+    Takes: String
+    Returns: None
+    """
     print("Reading config file %s" % path)
     config = ConfigParser.ConfigParser()
     config.read(path)
@@ -362,43 +381,43 @@ def read_config(path):
             if not c.is_tun():
                 c.to_router = filter((lambda rtr: rtr.name == c.to_router), Routers)[0]
 
-"""
-Prints app version in terminal
-Takes: None
-Returns: None
-"""
 def print_version():
+    """
+    Prints app version in terminal
+    Takes: None
+    Returns: None
+    """
     print("%s version %s" % (app_name, app_version) )
 
-"""
-Prints usage
-Takes: None
-Returns: None
-"""
 def print_usage():
+    """
+    Prints usage
+    Takes: None
+    Returns: None
+    """
     print("""
     Python script that starts multiple IOU instances
     Usage: %s [-v | --version] [-u | --usage] [-h | --help] -c <config_file>
     """ % (app_name) )
 
-"""
-Run 'cmd' in Linux shell redirecting output to STDOUT or to supplied file descriptor,
-returns PID
-Takes: String, TextStream
-Returns: Integer
-"""
 def sh(cmd, out = sys.stdout):
-    if is_debugging():
+    """
+    Run 'cmd' in Linux shell redirecting output to STDOUT or to supplied file descriptor,
+    returns 'subprocess' object
+    Takes: String, TextStream
+    Returns: Subprocess
+    """
+    if is_debugging() and type(out) == file:
         out.write("DEBUG: sh: %s\n" % cmd)
-    return subprocess.Popen(cmd, shell=True, cwd=GlobalData.workdir, stdout=out, stderr=subprocess.STDOUT).pid
+    return subprocess.Popen(cmd, shell=True, cwd=GlobalData.workdir, stdout=out, stderr=subprocess.STDOUT)
 
-"""
-Callback for SIGINT signal
-Used for graceful shutdown upon receiving Ctrl+C in terminal
-Takes: None
-Returns: None
-"""
 def ctrlc_handler(signum, name):
+    """
+    Callback for SIGINT signal
+    Used for graceful shutdown upon receiving Ctrl+C in terminal
+    Takes: None
+    Returns: None
+    """
     print("SIGINT catched, terminating...")
     map(lambda r: r.kill(), Routers)
     # Let them shutdown
@@ -406,50 +425,43 @@ def ctrlc_handler(signum, name):
     print_status()
     sys.exit(0)
 
-"""
-Try to run again each router if it crashed
-Takes: None
-Returns: None
-"""
 #FIXME: not respawning routers, because when router dies it's parent sh process is stuck in <defunct> state and is
 # still considered to be alive
 def respawn():
+    """
+    Try to run again each router if it crashed
+    Takes: None
+    Returns: None
+    """
     map(lambda r: r.run(), Routers)
 
-"""
-Print table with TUN and routers status
-Takes: None
-Returns: None
-"""
 def print_status():
+    """
+    Print table with TUN and routers status
+    Takes: None
+    Returns: None
+    """
     # Check if all TUN-s are running
     print("TUN\tPID\tALIVE")
     for r in Routers:
         for conn in r.conns:
             if conn.is_tun():
-                if conn.to_tun.is_alive():
-                    print("%s\t\t%s\tYES" % (conn.to_tun.name, conn.to_tun.pid))
-                else:
-                    print("%s\t\t%s\tNO" % (conn.to_tun.name,conn.to_tun.pid))
+                print("%s\t\t%s\t%s" % (conn.to_tun.name, conn.to_tun.pid, conn.to_tun.is_alive()))
     print("")
 
     # Showing router table
     print("CONSOLE\tROUTER\tRAM\tPID\tALIVE")
     for r in Routers:
         if not r.is_template():
-            if r.is_alive():
-                check = "YES"
-            else:
-                check = "NO"
-            print("%s\t%s\t%s\t%s\t%s" % (r.console, r.name, r.ram, r.pid, check))
+            print("%s\t%s\t%s\t%s\t%s" % (r.console, r.name, r.ram, r.pid, r.is_alive()))
     print("")
 
-"""
-Check if interface with 'ifname' exists in OS
-Takes: String
-Returns: Boolean
-"""
 def check_if_iface_exists(ifname):
+    """
+    Check if interface with 'ifname' exists in OS
+    Takes: String
+    Returns: Boolean
+    """
     # Quick and dirty hack, works only on Linux
     check = False
     with open("/proc/net/dev", "r") as f:
@@ -459,19 +471,19 @@ def check_if_iface_exists(ifname):
                 break
     return check
 
-"""
-Returns True if debug was enabled in config file
-You can use this function to print conditional output
-Takes: None
-Returns: Boolean
-"""
 def is_debugging():
+    """
+    Returns True if debug was enabled in config file
+    You can use this function to print conditional output
+    Takes: None
+    Returns: Boolean
+    """
     return GlobalData.debug.lower() in ["true", "yes", "1", "y", "t"]
 
-"""
-MAIN
-"""
 def main():
+    """
+    MAIN
+    """
     #Parsing cmdline options
     try:
         opts, args = getopt.getopt(sys.argv[1:], "vuhc:", ["version", "usage", "help", "config"])
