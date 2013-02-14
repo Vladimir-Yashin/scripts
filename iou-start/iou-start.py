@@ -44,15 +44,38 @@ GlobalData = __GlobalData()
 Routers = []
 
 class Tun:
+    """
+    This object is tied to router connection
+    """
     _id       = None
     _log_file = None
     name      = None
     pid       = None
     br_name   = None
 
-    def __init__(self, name):
+    """
+    Tun constructor. The first argument is default name like tun_R1_0_0 in case if
+    ifname is not specified in params, and second argument is params - list of
+    options like in UNIX cmdline (-b, -i, --bridge, --ifname) for Tun object
+    Takes: String, List[String]
+    Returns: Tun
+    """
+    def __init__(self, def_name, params):
         self._id = GlobalData.get_id()
-        self.name = name
+        self.name = def_name
+
+        #Parsing options
+        try:
+            opts, args = getopt.getopt(params, "i:b:", ["ifname=", "bridge="])
+        except getopt.GetoptError as err:
+            print str(err) # will print something like "option -a not recognized"
+            sys.exit(2)
+
+        for o, v in opts:
+            if o in ("-b", "--bridge"):
+                self.br_name = v
+            if o in ("-i", "--ifname"):
+                self.name = v
 
     def __str__(self):
         return "[%d] %s" % (self._id, self.name)
@@ -95,10 +118,10 @@ class Tun:
         self._log_file = open("%s/%s.log" % (GlobalData.workdir, self.name), "w")
         # Running iou2net
         self.pid = sh(self.get_cmdline(), out=self._log_file).pid
+        # Wait until iou2net is fully started
+        time.sleep(0.2)
         # Check if need to put this TUN into bridge
         if self.br_name is not None:
-            # Wait until iou2net is fully started
-            time.sleep(0.2)
             # Check if bridge exists
             if not check_if_iface_exists(self.br_name):
                 sh("brctl addbr %s" % self.br_name, out=self._log_file)
@@ -108,8 +131,9 @@ class Tun:
 
             sh("brctl addif %s %s" % (self.br_name, self.name), out=self._log_file)
 
-            sh("ip link set %s up" % self.name,    out=self._log_file)
             sh("ip link set %s up" % self.br_name, out=self._log_file)
+        # We need TUN up anyway
+        sh("ip link set %s up" % self.name, out=self._log_file)
 
 
         return self.pid
@@ -284,6 +308,9 @@ class IouRouter(object):
                 check_port = True
                 break
 
+        #FIXME: check_pid is not good for checking
+        check_pid = check_port
+
         # Combine results
         if check_pid != check_port:
             raise Exception("Router alive check failed, PID check (%s) and open console port check (%s) gave different results" % (check_pid, check_port))
@@ -354,13 +381,13 @@ def read_config(path):
                 # We found connection
                 conn = Connection()
                 conn.from_port   = item
-                val = val.split()
-                if len(val) > 2:
-                    raise Exception("Too many arguments to connection: [%s] %s" % (r.name, val))
+                val = val.split(" ", 1)
                 if val[0] == "tun":
-                    conn.to_tun = Tun("tun_%s_%s" % (r.name, re.sub("\/", "_", conn.from_port)))
-                    if len(val) == 2:
-                        conn.to_tun.br_name = val[1]
+                    params = []
+                    if len(val) > 1:
+                        params = val[1].split()
+                    # Default TUN name is tun_router_port
+                    conn.to_tun = Tun("tun_%s_%s" % (r.name, re.sub("\/", "_", conn.from_port)), params)
                 else:
                     conn.to_router = val[0]
                     conn.to_port   = val[1]
@@ -486,7 +513,7 @@ def main():
     """
     #Parsing cmdline options
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "vuhc:", ["version", "usage", "help", "config"])
+        opts, args = getopt.getopt(sys.argv[1:], "vuhc:", ["version", "usage", "help", "config="])
     except getopt.GetoptError as err:
         print str(err) # will print something like "option -a not recognized"
         print_usage()
