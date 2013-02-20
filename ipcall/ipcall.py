@@ -26,13 +26,12 @@ def get_password(username, storage):
     return password
 
 def usage():
-    print("Usage: ipcall.py [-p IPPHONE_IP] <number to call>")
+    print("Usage: ipcall.py [-p IPPHONE_IP] [-u USERNAME] [-d] <number to call>")
 
 def call(username, password, number):
     print("Got number %s" % number)
     number = re.sub("^\+", "000", number)
     number = re.sub("[^0-9]", "", number)
-    print("Calling %s" % number)
     c = pycurl.Curl()
     c.setopt(pycurl.POST, 1)
     #fout = StringIO.StringIO()
@@ -48,6 +47,7 @@ def call(username, password, number):
     """ % number,
     "B1": "Submit"
     }) )
+    print("Calling %s" % number)
     c.perform()
     result = c.getinfo(pycurl.RESPONSE_CODE)
     print("Result code: %s" % result)

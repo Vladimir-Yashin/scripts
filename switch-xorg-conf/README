@@ -1,0 +1,6 @@
+This script can switch xorg.conf between two different configurations
+on my laptop: with and without dock station.
+
+On dock there are two external monitors connected to NVIDIA card and LVDS is on Intel,
+but when I work without dock I need to stop X, turn off discrete graphics and start over.
+

@@ -1,0 +1,76 @@
+Section "Device"
+    Identifier "Device0"
+    Driver     "nvidia"
+    BusID      "PCI:1:0:0"
+    Screen     0
+EndSection
+
+Section "Device"
+    Identifier "Device1"
+    Driver     "nvidia"
+    BusID      "PCI:1:0:0"
+    Screen     1
+EndSection
+
+Section "Device"
+    Identifier "Device2"
+    Driver     "intel"
+    BusID      "PCI:0:2:0
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor0"
+    VendorName "HP"
+    ModelName  "ZR2440w"
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor1"
+    VendorName "Acer"
+    ModelName  "AL1917"
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor2"
+EndSection
+
+Section "Screen"
+    Identifier "Screen0"
+    Monitor    "Monitor0"
+    Device     "Device0"
+EndSection
+
+Section "Screen"
+    Identifier "Screen1"
+    Monitor    "Monitor1"
+    Device     "Device1"
+EndSection
+
+Section "Screen"
+    Identifier "Screen2"
+    Monitor    "Monitor2"
+    Device     "Device2"
+EndSection
+
+Section "ServerLayout"
+    Identifier "Layout0"
+    Screen     "Screen0"
+    Screen     "Screen1" RightOf "Screen0"
+    Screen     "Screen2" LeftOf  "Screen0"
+EndSection
+
+Section "Files"
+    ModulePath "/usr/lib/nvidia-current/xorg"
+    ModulePath "/usr/lib/xorg/modules"
+EndSection
+
+Section "ServerFlags"
+    Option "Xinerama" "true"
+    Option "RandR"    "true"
+    Option "DontZap"  "true"
+EndSection
+
+Section "Extensions"
+    Option "Composite" "enable"
+EndSection
+
